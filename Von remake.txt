@@ -1,0 +1,2259 @@
+print("leaked by weekly")
+
+local success, err = pcall(function()
+    -- ===== ORIGINAL SCRIPT BEGINS =====
+    local cloneref = cloneref or function(object) return object end
+    local Players           = cloneref(game:GetService("Players"))
+    local ReplicatedStorage = cloneref(game:GetService("ReplicatedStorage"))
+    local RunService        = cloneref(game:GetService("RunService"))
+    local UserInputService  = cloneref(game:GetService("UserInputService"))
+    local HttpService       = cloneref(game:GetService("HttpService"))
+    local Stats             = cloneref(game:GetService("Stats"))
+    local Lighting          = cloneref(game:GetService("Lighting"))
+    local Workspace         = cloneref(game:GetService("Workspace"))
+    local TweenService      = cloneref(game:GetService("TweenService"))
+    local player = Players.LocalPlayer
+    local playerGui = player:WaitForChild("PlayerGui")
+
+    if getgenv and getgenv().StopAura then pcall(getgenv().StopAura) end
+
+    -- CONFIGURATION SYSTEM --
+    local CONFIG_FILE = "von_code_redeemer_config.json"
+    local savedConfig = {
+        codeSniper = true,
+        autoSubmit = true,
+        submitAfter = 1,
+        spamRedeem = true,
+        antiLag = false,
+        antiRagdoll = false,
+        removeAccessories = false,
+        autoBuy = false,
+        listenKeybind = "F",
+        clearFeedKeybind = "C",
+        autoCodeTyped = true,
+        manualMode = false,
+        caseMode = "EXACT",
+        wordCount = 1,
+        speedMode = "FAST",
+    }
+    pcall(function()
+        if type(isfile) == "function" and type(readfile) == "function"
+        and isfile(CONFIG_FILE) then
+            local decoded = HttpService:JSONDecode(readfile(CONFIG_FILE))
+            if type(decoded) == "table" then
+                if type(decoded.codeSniper) == "boolean" then savedConfig.codeSniper = decoded.codeSniper end
+                if type(decoded.autoSubmit) == "boolean" then savedConfig.autoSubmit = decoded.autoSubmit end
+                if type(decoded.submitAfter) == "number" then savedConfig.submitAfter = math.max(1, math.min(10, math.floor(decoded.submitAfter))) end
+                if type(decoded.spamRedeem) == "boolean" then savedConfig.spamRedeem = decoded.spamRedeem end
+                if type(decoded.antiLag) == "boolean" then savedConfig.antiLag = decoded.antiLag end
+                if type(decoded.antiRagdoll) == "boolean" then savedConfig.antiRagdoll = decoded.antiRagdoll end
+                if type(decoded.removeAccessories) == "boolean" then savedConfig.removeAccessories = decoded.removeAccessories end
+                if type(decoded.autoBuy) == "boolean" then savedConfig.autoBuy = decoded.autoBuy end
+                if type(decoded.listenKeybind) == "string" and #decoded.listenKeybind == 1 then
+                    savedConfig.listenKeybind = decoded.listenKeybind:upper()
+                end
+                if type(decoded.clearFeedKeybind) == "string" and #decoded.clearFeedKeybind == 1 then
+                    savedConfig.clearFeedKeybind = decoded.clearFeedKeybind:upper()
+                end
+                if type(decoded.autoCodeTyped) == "boolean" then savedConfig.autoCodeTyped = decoded.autoCodeTyped end
+                if type(decoded.manualMode) == "boolean" then savedConfig.manualMode = decoded.manualMode end
+                if type(decoded.caseMode) == "string" then savedConfig.caseMode = decoded.caseMode end
+                if type(decoded.wordCount) == "number" then savedConfig.wordCount = math.max(1, math.min(4, math.floor(decoded.wordCount))) end
+                if type(decoded.speedMode) == "string" then savedConfig.speedMode = decoded.speedMode end
+            end
+        end
+    end)
+
+    local function saveConfig()
+        if type(writefile) ~= "function" then return end
+        pcall(function()
+            writefile(CONFIG_FILE, HttpService:JSONEncode({
+                codeSniper = savedConfig.codeSniper,
+                autoSubmit = savedConfig.autoSubmit,
+                submitAfter = savedConfig.submitAfter,
+                spamRedeem = savedConfig.spamRedeem,
+                antiLag = savedConfig.antiLag,
+                antiRagdoll = savedConfig.antiRagdoll,
+                removeAccessories = savedConfig.removeAccessories,
+                autoBuy = savedConfig.autoBuy,
+                listenKeybind = savedConfig.listenKeybind,
+                clearFeedKeybind = savedConfig.clearFeedKeybind,
+                autoCodeTyped = savedConfig.autoCodeTyped,
+                manualMode = savedConfig.manualMode,
+                caseMode = savedConfig.caseMode,
+                wordCount = savedConfig.wordCount,
+                speedMode = savedConfig.speedMode,
+            }))
+        end)
+    end
+
+    -- STATE VARIABLES --
+    local _enabled              = savedConfig.codeSniper
+    local _seen                 = {}
+    local _focused              = nil
+    local _lastBox              = nil
+    local _autoAccept           = savedConfig.autoSubmit
+    local _submitAfter          = savedConfig.submitAfter
+    local _capturedParts        = {}
+    local _lastWatchedBox       = nil
+    local _boxTextConn          = nil
+    local _boxAncestryConn      = nil
+    local _boxVisibilityConns   = {}
+    local _spamRedeem           = savedConfig.spamRedeem
+    local _lastNonBlankBoxText  = ""
+    local INSTINCT_CASE_MODE    = savedConfig.caseMode or "EXACT"
+    local INSTINCT_WORD_COUNT   = savedConfig.wordCount or 1
+
+    local _autoCodeTypedEnabled = savedConfig.autoCodeTyped
+    local _manualMode           = savedConfig.manualMode or false
+    local INSTINCT_SPEED_MODE   = savedConfig.speedMode or "FAST"
+
+    local _programmaticChange = false
+    local _manualSubmitDebounce = nil
+
+    local _listenKeybind = savedConfig.listenKeybind or "F"
+    local _listenInputConnection = nil
+    local _capturingListenKey = false
+    local listenKeyBadge = nil
+    local listenKeyClear = nil
+
+    local _clearFeedKeybind = savedConfig.clearFeedKeybind or "C"
+    local _clearFeedInputConnection = nil
+    local _capturingClearFeedKey = false
+    local redeemKeyBadge = nil
+    local redeemKeyClear = nil
+
+    local _antiLagEnabled = savedConfig.antiLag
+    local _antiLagDescendantConn = nil
+    local _removeAccessoriesEnabled = savedConfig.removeAccessories
+    local _accessoryConnection = nil
+
+    local _antiRagdollEnabled = savedConfig.antiRagdoll
+    local _ragdollConnection = nil
+    local _ragdollCooldown = 0
+
+    local SPEED_PRESETS = {
+        MAX           = { spam = 0.01, submit = 0.01, after = nil },
+        FAST          = { spam = 0.05, submit = 0.05, after = nil },
+        MED           = { spam = 0.12, submit = 0.15, after = nil },
+        ["EVERY WORD"] = { spam = 0.05, submit = 0.05, after = 1 },
+    }
+    local function currentSpeedPreset()
+        return SPEED_PRESETS[INSTINCT_SPEED_MODE] or SPEED_PRESETS.FAST
+    end
+    local function effectiveSubmitAfter()
+        local p = currentSpeedPreset()
+        if p.after then return p.after end
+        return _submitAfter
+    end
+
+    -- ============================================================
+    -- DZ AUTO BUY BACKEND (integrated)
+    -- ============================================================
+    local _autoBuyActive = false
+    local _autoBuyRange = 17
+    local _autoBuyKeybind = "K"
+    local _autoBuyLockedTarget = nil
+    local _autoBuyBodyPos = nil
+    local _autoBuyCarpetConn = nil
+    local _autoBuyRingPart = nil
+    local _autoBuyPurchaseRemote = nil
+    local _autoBuyConveyorCache = {}
+    local _autoBuyBuyLoop = nil
+    local _autoBuyScanLoop = nil
+    local _autoBuyRingUpdateConn = nil
+    local HOVER_HEIGHT = 5
+    local BUY_INTERVAL = 0.08
+
+    local function autoBuyCreateRing()
+        if _autoBuyRingPart then _autoBuyRingPart:Destroy() end
+        local r = Instance.new("Part")
+        r.Name = "DZAutoBuyRing"
+        r.Shape = Enum.PartType.Cylinder
+        r.Anchored = true
+        r.CanCollide = false
+        r.CanTouch = false
+        r.CanQuery = false
+        r.CastShadow = false
+        r.Material = Enum.Material.Neon
+        r.Transparency = 0.5
+        r.Color = Color3.fromRGB(255, 255, 255)
+        r.Size = Vector3.new(0.5, _autoBuyRange * 2, _autoBuyRange * 2)
+        r.Parent = Workspace
+        _autoBuyRingPart = r
+    end
+
+    local function autoBuyDestroyRing()
+        if _autoBuyRingPart then _autoBuyRingPart:Destroy(); _autoBuyRingPart = nil end
+    end
+
+    local function autoBuyEquipCarpet()
+        local char = player.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return end
+        local toolName = "Flying Carpet"
+        if not char:FindFirstChild(toolName) then
+            local tool = player.Backpack:FindFirstChild(toolName)
+            if tool then hum:EquipTool(tool) end
+        end
+    end
+
+    local function autoBuyStartCarpetLock()
+        if _autoBuyCarpetConn then _autoBuyCarpetConn:Disconnect() end
+        _autoBuyCarpetConn = RunService.Heartbeat:Connect(function()
+            if _autoBuyActive then autoBuyEquipCarpet() end
+        end)
+        autoBuyEquipCarpet()
+    end
+
+    local function autoBuyStopCarpetLock()
+        if _autoBuyCarpetConn then _autoBuyCarpetConn:Disconnect(); _autoBuyCarpetConn = nil end
+    end
+
+    local function autoBuyEnsureBodyPos(hrp)
+        if _autoBuyBodyPos and _autoBuyBodyPos.Parent == hrp then return _autoBuyBodyPos end
+        if _autoBuyBodyPos then _autoBuyBodyPos:Destroy() end
+        local bp = Instance.new("BodyPosition", hrp)
+        bp.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        bp.P = 20000
+        bp.D = 1000
+        bp.Position = hrp.Position
+        _autoBuyBodyPos = bp
+        return bp
+    end
+
+    local function autoBuyDestroyBodyPos()
+        if _autoBuyBodyPos then _autoBuyBodyPos:Destroy(); _autoBuyBodyPos = nil end
+    end
+
+    local function autoBuyResolveRemote()
+        if _autoBuyPurchaseRemote and _autoBuyPurchaseRemote.Parent then return _autoBuyPurchaseRemote end
+        pcall(function()
+            local net = ReplicatedStorage:FindFirstChild("Packages") and ReplicatedStorage.Packages:FindFirstChild("Net")
+            if net then
+                for _, v in ipairs(net:GetChildren()) do
+                    local nl = (v.Name or ""):lower()
+                    if nl:find("buy") or nl:find("purchase") or nl:find("acquire") then
+                        _autoBuyPurchaseRemote = v; return
+                    end
+                end
+            end
+        end)
+        return _autoBuyPurchaseRemote
+    end
+
+    local function autoBuyFirePurchase(prompt)
+        if not prompt or not prompt.Parent or not prompt.Enabled then return end
+        pcall(function()
+            if fireproximityprompt then fireproximityprompt(prompt) end
+        end)
+        task.spawn(function()
+            local remote = autoBuyResolveRemote()
+            if remote then
+                pcall(function()
+                    if remote:IsA("RemoteFunction") then
+                        remote:InvokeServer(prompt.Parent)
+                    elseif remote:IsA("RemoteEvent") then
+                        remote:FireServer(prompt.Parent)
+                    end
+                end)
+            end
+        end)
+    end
+
+    local function autoBuyScanConveyor()
+        local results = {}
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("ProximityPrompt") and obj.Enabled then
+                local action = (obj.ActionText or ""):lower()
+                if action:find("purchase") or action:find("buy") or action:find("comprar") then
+                    local part = obj.Parent
+                    if not part then continue end
+                    local realPart = part:IsA("Attachment") and part.Parent or part
+                    if not (realPart and realPart:IsA("BasePart")) then continue end
+                    table.insert(results, { prompt = obj, part = realPart })
+                end
+            end
+        end
+        return results
+    end
+
+    local function autoBuyRefreshConveyor()
+        local ok, found = pcall(autoBuyScanConveyor)
+        if ok then _autoBuyConveyorCache = found end
+    end
+
+    local function autoBuyUpdate()
+        if not _autoBuyActive then
+            _autoBuyLockedTarget = nil
+            autoBuyDestroyBodyPos()
+            autoBuyStopCarpetLock()
+            return
+        end
+        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not hrp then return end
+        local best, bestDist = nil, math.huge
+        for _, entry in ipairs(_autoBuyConveyorCache) do
+            if entry.prompt and entry.prompt.Parent and entry.prompt.Enabled and entry.part and entry.part.Parent then
+                local dist = (hrp.Position - entry.part.Position).Magnitude
+                if dist <= _autoBuyRange and dist < bestDist then
+                    bestDist = dist; best = entry
+                end
+            end
+        end
+        if best then
+            _autoBuyLockedTarget = best
+            local bp = autoBuyEnsureBodyPos(hrp)
+            if bp then bp.Position = best.part.Position + Vector3.new(0, HOVER_HEIGHT, 0) end
+            autoBuyFirePurchase(best.prompt)
+        else
+            _autoBuyLockedTarget = nil
+            autoBuyDestroyBodyPos()
+        end
+    end
+
+    local function autoBuyStart()
+        if _autoBuyActive then return end
+        _autoBuyActive = true
+        savedConfig.autoBuy = true
+        saveConfig()
+        autoBuyCreateRing()
+        autoBuyStartCarpetLock()
+        autoBuyRefreshConveyor()
+        _autoBuyBuyLoop = task.spawn(function()
+            while true do
+                task.wait(BUY_INTERVAL)
+                if _autoBuyActive then pcall(autoBuyUpdate) end
+            end
+        end)
+        _autoBuyScanLoop = task.spawn(function()
+            while true do
+                task.wait(0.5)
+                if _autoBuyActive then pcall(autoBuyRefreshConveyor) end
+            end
+        end)
+        _autoBuyRingUpdateConn = RunService.Heartbeat:Connect(function()
+            if not _autoBuyActive then return end
+            local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if hrp and _autoBuyRingPart then
+                _autoBuyRingPart.CFrame = hrp.CFrame * CFrame.Angles(0, 0, math.rad(90)) + Vector3.new(0, -2.5, 0)
+            end
+        end)
+    end
+
+    local function autoBuyStop()
+        if not _autoBuyActive then return end
+        _autoBuyActive = false
+        savedConfig.autoBuy = false
+        saveConfig()
+        autoBuyDestroyRing()
+        autoBuyStopCarpetLock()
+        autoBuyDestroyBodyPos()
+        _autoBuyLockedTarget = nil
+        if _autoBuyBuyLoop then task.cancel(_autoBuyBuyLoop); _autoBuyBuyLoop = nil end
+        if _autoBuyScanLoop then task.cancel(_autoBuyScanLoop); _autoBuyScanLoop = nil end
+        if _autoBuyRingUpdateConn then _autoBuyRingUpdateConn:Disconnect(); _autoBuyRingUpdateConn = nil end
+    end
+
+    local function toggleAutoBuy()
+        if _autoBuyActive then autoBuyStop() else autoBuyStart() end
+    end
+
+    UserInputService.InputBegan:Connect(function(inp, gp)
+        if gp then return end
+        if inp.KeyCode == Enum.KeyCode[_autoBuyKeybind] then toggleAutoBuy() end
+    end)
+
+    player.CharacterAdded:Connect(function()
+        if _autoBuyActive then
+            task.wait(0.5)
+            if _autoBuyActive then
+                autoBuyStartCarpetLock()
+                autoBuyCreateRing()
+            end
+        end
+    end)
+
+    -- END AUTO BUY INTEGRATION --
+
+    local getupvalues = (debug and debug.getupvalues) or getupvalues
+    local getconns    = getconnections or (debug and debug.getconnections)
+    local setupv      = (debug and debug.setupvalue) or setupvalue
+
+    local setStatus, flashCode, appendToBox
+    local clearInstinctCapture
+
+    -- ============================================================
+    -- ANTI-LAG
+    -- ============================================================
+    local function processDescendant(obj)
+        if obj:IsA("ParticleEmitter") or obj:IsA("Trail") or obj:IsA("Beam") or obj:IsA("Fire") then
+            obj.Enabled = false
+        end
+        if obj:IsA("Decal") or obj:IsA("Texture") then
+            obj.Transparency = 1
+        end
+        if obj:IsA("BasePart") then
+            obj.Material = Enum.Material.Plastic
+            obj.Reflectance = 0
+            obj.CastShadow = false
+        end
+        if _removeAccessoriesEnabled and (obj:IsA("Accessory") or obj:IsA("Hat")) then
+            obj:Destroy()
+        end
+    end
+
+    local function optimizeLighting()
+        Lighting.GlobalShadows = false
+        Lighting.FogEnd = 9000000488
+        Lighting.Brightness = 1
+        Lighting.EnvironmentDiffuseScale = 0
+        Lighting.EnvironmentSpecularScale = 0
+        for _, effect in pairs(Lighting:GetChildren()) do
+            if effect:IsA("BlurEffect") or effect:IsA("SunRaysEffect") or effect:IsA("ColorCorrectionEffect") or effect:IsA("BloomEffect") or effect:IsA("DepthOfFieldEffect") then
+                effect.Enabled = false
+            end
+        end
+        for _, obj in pairs(Workspace:GetDescendants()) do
+            processDescendant(obj)
+        end
+    end
+
+    local function removeAllAccessories()
+        for _, plr in pairs(Players:GetPlayers()) do
+            if plr.Character then
+                for _, obj in ipairs(plr.Character:GetDescendants()) do
+                    if obj:IsA("Accessory") or obj:IsA("Hat") then obj:Destroy() end
+                end
+            end
+        end
+    end
+
+    local function startAntiLag()
+        if _antiLagEnabled then return end
+        _antiLagEnabled = true
+        pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+        optimizeLighting()
+        if _antiLagDescendantConn then _antiLagDescendantConn:Disconnect() end
+        _antiLagDescendantConn = Workspace.DescendantAdded:Connect(processDescendant)
+        if _removeAccessoriesEnabled then
+            removeAllAccessories()
+            if not _accessoryConnection then
+                _accessoryConnection = Players.PlayerAdded:Connect(function(plr)
+                    plr.CharacterAdded:Connect(function(char)
+                        task.wait(0.5)
+                        if _removeAccessoriesEnabled then
+                            for _, obj in ipairs(char:GetDescendants()) do
+                                if obj:IsA("Accessory") or obj:IsA("Hat") then obj:Destroy() end
+                            end
+                        end
+                    end)
+                end)
+            end
+        end
+    end
+
+    local function stopAntiLag()
+        _antiLagEnabled = false
+        if _antiLagDescendantConn then
+            _antiLagDescendantConn:Disconnect(); _antiLagDescendantConn = nil
+        end
+    end
+
+    local function startRemoveAccessories()
+        if _removeAccessoriesEnabled then return end
+        _removeAccessoriesEnabled = true
+        removeAllAccessories()
+        if not _accessoryConnection then
+            _accessoryConnection = Players.PlayerAdded:Connect(function(plr)
+                plr.CharacterAdded:Connect(function(char)
+                    task.wait(0.5)
+                    if _removeAccessoriesEnabled then
+                        for _, obj in ipairs(char:GetDescendants()) do
+                            if obj:IsA("Accessory") or obj:IsA("Hat") then obj:Destroy() end
+                        end
+                    end
+                end)
+            end)
+        end
+        if not _antiLagEnabled then
+            if _antiLagDescendantConn then _antiLagDescendantConn:Disconnect() end
+            _antiLagDescendantConn = Workspace.DescendantAdded:Connect(processDescendant)
+        end
+    end
+
+    local function stopRemoveAccessories()
+        _removeAccessoriesEnabled = false
+        if _accessoryConnection then
+            _accessoryConnection:Disconnect(); _accessoryConnection = nil
+        end
+        if not _antiLagEnabled and _antiLagDescendantConn then
+            _antiLagDescendantConn:Disconnect(); _antiLagDescendantConn = nil
+        end
+    end
+
+    -- ============================================================
+    -- ANTI-RAGDOLL
+    -- ============================================================
+    local function forceReset()
+        local char = player.Character
+        if not char then return end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not hum or not root or hum.Health <= 0 then return end
+        pcall(function()
+            hum:ChangeState(Enum.HumanoidStateType.GettingUp)
+            root.Velocity = Vector3.zero
+            root.RotVelocity = Vector3.zero
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            for _, obj in ipairs(char:GetDescendants()) do
+                if obj:IsA("Motor6D") then obj.Enabled = true end
+                if obj:IsA("Constraint") then obj.Enabled = true end
+            end
+            workspace.CurrentCamera.CameraSubject = hum
+            local PM = player.PlayerScripts:FindFirstChild("PlayerModule")
+            if PM then
+                local CM = require(PM:FindFirstChild("ControlModule"))
+                if CM then CM:Enable() end
+            end
+            hum.AutoRotate = true
+            hum.PlatformStand = false
+            hum.Sit = false
+        end)
+    end
+
+    local function startAntiRagdoll()
+        if _ragdollConnection then return end
+        _antiRagdollEnabled = true
+        _ragdollConnection = RunService.Heartbeat:Connect(function()
+            if not _antiRagdollEnabled then return end
+            local char = player.Character
+            if not char then return end
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if not hum or hum.Health <= 0 then return end
+            local state = hum:GetState()
+            local isRagdolled = (state == Enum.HumanoidStateType.Physics or
+                                 state == Enum.HumanoidStateType.Ragdoll or
+                                 state == Enum.HumanoidStateType.FallingDown)
+            if isRagdolled then
+                local now = tick()
+                if now - _ragdollCooldown > 0.15 then
+                    _ragdollCooldown = now
+                    forceReset()
+                end
+            end
+        end)
+    end
+
+    local function stopAntiRagdoll()
+        _antiRagdollEnabled = false
+        if _ragdollConnection then
+            _ragdollConnection:Disconnect(); _ragdollConnection = nil
+        end
+    end
+
+    -- ============================================================
+    -- UTILITY & REDEEM LOGIC
+    -- ============================================================
+    local function isOurGui(instance)
+        local p = instance
+        for _ = 1, 12 do
+            if not p then break end
+            if p.Name == "VonCodeRedeemerUI" or p.Name == "InstinctCodeSniperUI"
+                or p.Name == "SourcesHubRedeemerGui" or p.Name == "InstinctCodeSniperSettingsUI" then
+                return true
+            end
+            p = p.Parent
+        end
+        return false
+    end
+
+    local function isVisibleChain(inst)
+        local current = inst
+        while current do
+            if current:IsA("GuiObject") and not current.Visible then return false end
+            if current:IsA("ScreenGui") then return current.Enabled end
+            current = current.Parent
+        end
+        return true
+    end
+
+    local function findAllTextBoxes(pg)
+        local boxes = {}
+        for _, gui in ipairs(pg:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and not isOurGui(gui) then
+                for _, d in ipairs(gui:GetDescendants()) do
+                    if d:IsA("TextBox") and not isOurGui(d) then
+                        boxes[#boxes+1] = d
+                    end
+                end
+            end
+        end
+        return boxes
+    end
+
+    local function findCodeButtons(pg)
+        local btns = {}
+        for _, gui in ipairs(pg:GetChildren()) do
+            if gui:IsA("ScreenGui") and gui.Enabled and not isOurGui(gui) then
+                for _, d in ipairs(gui:GetDescendants()) do
+                    if (d:IsA("TextButton") or d:IsA("ImageButton")) and not isOurGui(d) then
+                        local n  = d.Name:lower()
+                        local pn = (d.Parent and d.Parent.Name or ""):lower()
+                        if (n:find("code") or n:find("redeem") or pn:find("code") or pn:find("redeem"))
+                            and isVisibleChain(d) then
+                            btns[#btns+1] = d
+                        end
+                    end
+                end
+            end
+        end
+        return btns
+    end
+
+    local function clickButton(btn)
+        if not btn then return false end
+        local methods = {}
+        methods[#methods+1] = function() btn.MouseButton1Click:Fire() end
+        methods[#methods+1] = function() btn.Activated:Fire() end
+        if typeof(firesignal) == "function" then
+            methods[#methods+1] = function() firesignal(btn.MouseButton1Click) end
+            methods[#methods+1] = function() firesignal(btn.Activated) end
+        end
+        if typeof(getconns) == "function" then
+            methods[#methods+1] = function()
+                local ok, cs = pcall(getconns, btn.MouseButton1Click)
+                if ok and type(cs) == "table" then
+                    for _, c in ipairs(cs) do pcall(function() c:Fire() end) end
+                end
+                local ok2, cs2 = pcall(getconns, btn.Activated)
+                if ok2 and type(cs2) == "table" then
+                    for _, c in ipairs(cs2) do pcall(function() c:Fire() end) end
+                end
+            end
+        end
+        if typeof(fireclick) == "function" then
+            methods[#methods+1] = function() fireclick(btn) end
+        end
+        local anyOk = false
+        for _, fn in ipairs(methods) do
+            local ok = pcall(fn)
+            anyOk = anyOk or ok
+        end
+        return anyOk
+    end
+
+    local function fireBoxFocusLost(box)
+        if not box then return false end
+        local anyFired = false
+        if typeof(firesignal) == "function" then
+            local ok = pcall(firesignal, box.FocusLost, true)
+            anyFired = anyFired or ok
+        end
+        if typeof(getconns) == "function" then
+            local ok, cs = pcall(getconns, box.FocusLost)
+            if ok and type(cs) == "table" then
+                for _, c in ipairs(cs) do
+                    local fn
+                    pcall(function() fn = c.Function end)
+                    if fn and typeof(getupvalues) == "function" and typeof(setupv) == "function" then
+                        local uOk, ups = pcall(getupvalues, fn)
+                        if uOk and type(ups) == "table" then
+                            for i, v in pairs(ups) do
+                                if type(v) == "boolean" and v == true then
+                                    pcall(setupv, fn, i, false)
+                                end
+                            end
+                        end
+                    end
+                    local fOk = pcall(function()
+                        if c.Enabled ~= false then c:Fire(true) end
+                    end)
+                    anyFired = anyFired or fOk
+                end
+            end
+        end
+        return anyFired
+    end
+
+    local function typeAndSubmitCode(code)
+        if INSTINCT_CASE_MODE == "UPPER" then
+            code = code:upper()
+        elseif INSTINCT_CASE_MODE == "lower" then
+            code = code:lower()
+        end
+
+        local preset = currentSpeedPreset()
+        local SPAM_DELAY   = preset.spam
+        local SPAM_ITER    = 17
+        local SUBMIT_DELAY = preset.submit
+
+        local pg = playerGui or player:FindFirstChildOfClass("PlayerGui")
+        if not pg then return false, "no PlayerGui" end
+
+        local codesGui = pg:FindFirstChild("Codes")
+        if codesGui then
+            if codesGui:IsA("ScreenGui") then codesGui.Enabled = true end
+            local codesFrame = codesGui:FindFirstChild("Codes") or codesGui
+            if codesFrame then
+                if codesFrame:IsA("GuiObject") then codesFrame.Visible = true end
+                local cur = codesFrame
+                while cur and cur ~= codesGui do
+                    if cur:IsA("GuiObject") then cur.Visible = true end
+                    cur = cur.Parent
+                end
+                local box = nil
+                for _, d in ipairs(codesFrame:GetDescendants()) do
+                    if d:IsA("TextBox") and not isOurGui(d) then box = d; break end
+                end
+                local submitBtn = nil
+                for _, d in ipairs(codesFrame:GetDescendants()) do
+                    if (d:IsA("TextButton") or d:IsA("ImageButton")) and not isOurGui(d) then
+                        local n = d.Name:lower()
+                        local txt = ""
+                        pcall(function() txt = d.Text:lower() end)
+                        if n:find("submit") or txt:find("submit") or n:find("redeem") or txt:find("redeem") or n:find("claim") or txt:find("confirm") or n:find("enter") then
+                            submitBtn = d; break
+                        end
+                    end
+                end
+                if not submitBtn then
+                    for _, d in ipairs(codesFrame:GetDescendants()) do
+                        if (d:IsA("TextButton") or d:IsA("ImageButton")) and not isOurGui(d) then
+                            local n = d.Name:lower()
+                            if not n:find("close") and not n:find("x") and not n:find("toggle") then
+                                submitBtn = d; break
+                            end
+                        end
+                    end
+                end
+                if box then
+                    pcall(function() box.Text = code end)
+                    if submitBtn then
+                        if _spamRedeem then
+                            for _ = 1, SPAM_ITER do clickButton(submitBtn); task.wait(SPAM_DELAY) end
+                        else
+                            clickButton(submitBtn)
+                        end
+                    end
+                    fireBoxFocusLost(box)
+                    return true, "submitted via PlayerGui.Codes"
+                end
+            end
+        end
+
+        local btns = findCodeButtons(pg)
+        for _, btn in ipairs(btns) do
+            clickButton(btn)
+            task.wait(0)
+        end
+
+        local box = nil
+        local deadline = tick() + 2
+        while tick() < deadline do
+            local allBoxes = findAllTextBoxes(pg)
+            for _, d in ipairs(allBoxes) do
+                if isVisibleChain(d) then
+                    local n  = d.Name:lower()
+                    local pn = (d.Parent and d.Parent.Name or ""):lower()
+                    if n:find("code") or pn:find("code") or n:find("redeem") or pn:find("redeem") or n:find("input") or pn:find("textbox") or n:find("enter") then
+                        box = d; break
+                    end
+                end
+            end
+            if not box then
+                for _, d in ipairs(allBoxes) do
+                    if isVisibleChain(d) then box = d; break end
+                end
+            end
+            if box then break end
+            task.wait()
+        end
+        if not box then return false, "no codebox visible" end
+        pcall(function() box.Text = code end)
+
+        local redeemBtn = nil
+        local searchNames = {"submit","redeem","claim","confirm","enter","send","apply","ok","use","go","check"}
+        local p = box.Parent
+        for _ = 1, 8 do
+            if not p then break end
+            for _, d in ipairs(p:GetDescendants()) do
+                if (d:IsA("TextButton") or d:IsA("ImageButton")) and not isOurGui(d) and d ~= box then
+                    local n = d.Name:lower()
+                    local txt = ""
+                    pcall(function() txt = d.Text:lower() end)
+                    for _, sn in ipairs(searchNames) do
+                        if n:find(sn) or txt:find(sn) then
+                            if isVisibleChain(d) then redeemBtn = d; break end
+                        end
+                    end
+                    if redeemBtn then break end
+                end
+            end
+            if redeemBtn then break end
+            p = p.Parent
+        end
+        if redeemBtn then
+            if _spamRedeem then
+                for _ = 1, SPAM_ITER do clickButton(redeemBtn); task.wait(SPAM_DELAY) end
+            else
+                clickButton(redeemBtn)
+            end
+        end
+        fireBoxFocusLost(box)
+        return true, "submitted via dynamic search"
+    end
+
+    local function instinctCodeBox()
+        local pg = playerGui
+        local allBoxes = findAllTextBoxes(pg)
+        for _, box in ipairs(allBoxes) do
+            if isVisibleChain(box) then return box end
+        end
+        return nil
+    end
+
+    -- ============================================================
+    -- STYLING & HELPERS
+    -- ============================================================
+    local C = {
+        bg          = Color3.fromRGB(18, 13, 8),
+        header      = Color3.fromRGB(10, 8, 6),
+        tabActive   = Color3.fromRGB(48, 34, 20),
+        tabIdle     = Color3.fromRGB(26, 19, 12),
+        row         = Color3.fromRGB(26, 19, 12),
+        panel       = Color3.fromRGB(22, 16, 10),
+        border      = Color3.fromRGB(64, 48, 26),
+        borderSoft  = Color3.fromRGB(46, 34, 18),
+        gold        = Color3.fromRGB(212, 160, 74),
+        goldBright  = Color3.fromRGB(236, 188, 100),
+        goldDim     = Color3.fromRGB(140, 105, 48),
+        cream       = Color3.fromRGB(232, 213, 168),
+        text        = Color3.fromRGB(224, 208, 168),
+        dim         = Color3.fromRGB(140, 118, 78),
+        veryDim     = Color3.fromRGB(80, 66, 42),
+        red         = Color3.fromRGB(210, 100, 90),
+        green       = Color3.fromRGB(126, 200, 130),
+    }
+
+    local function addCorner(parent, radius)
+        local value = Instance.new("UICorner")
+        value.CornerRadius = UDim.new(0, radius)
+        value.Parent = parent
+        return value
+    end
+
+    local function addStroke(parent, color, thickness, transparency)
+        local value = Instance.new("UIStroke")
+        value.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        value.Color = color
+        value.Thickness = thickness or 1
+        value.Transparency = transparency or 0
+        value.Parent = parent
+        return value
+    end
+
+    local function makeLabel(parent, name, text, size, position, textSize, color, font)
+        local label = Instance.new("TextLabel")
+        label.Name = name
+        label.Size = size
+        label.Position = position
+        label.BackgroundTransparency = 1
+        label.Text = text
+        label.TextSize = textSize
+        label.TextColor3 = color
+        label.Font = font or Enum.Font.GothamMedium
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.TextYAlignment = Enum.TextYAlignment.Center
+        label.Parent = parent
+        return label
+    end
+
+    local function setClipboardSafe(text)
+        if not text or text == "" then return end
+        if setclipboard then
+            pcall(function() setclipboard(text) end)
+        elseif toclipboard then
+            pcall(function() toclipboard(text) end)
+        end
+    end
+
+    -- CLEANUP OLD
+    pcall(function()
+        for _, name in ipairs({"VonCodeRedeemerUI", "TracedUI", "InstinctCodeSniperUI", "InstinctCodeSniperSettingsUI", "AutoTypeCodesUI", "ACEPaste"}) do
+            local prev = game.CoreGui:FindFirstChild(name)
+            if prev then prev:Destroy() end
+        end
+    end)
+    for _, name in ipairs({"VonCodeRedeemerUI", "TracedUI", "InstinctCodeSniperUI", "InstinctCodeSniperSettingsUI", "AutoTypeCodesUI", "ACEPaste"}) do
+        local prev = playerGui:FindFirstChild(name)
+        if prev then prev:Destroy() end
+    end
+
+    -- ============================================================
+    -- MAIN WINDOW
+    -- ============================================================
+    local WINDOW_W = 560
+    local WINDOW_H = 360
+    local HEADER_H = 44
+    local SIDEBAR_W = 140
+
+    local GUI = Instance.new("ScreenGui")
+    GUI.Name = "VonCodeRedeemerUI"
+    GUI.ResetOnSpawn = false
+    GUI.IgnoreGuiInset = true
+    GUI.DisplayOrder = 999
+    if not pcall(function() GUI.Parent = game.CoreGui end) then GUI.Parent = playerGui end
+
+    local Window = Instance.new("Frame")
+    Window.Name = "Window"
+    Window.Size = UDim2.fromOffset(WINDOW_W, WINDOW_H)
+    Window.Position = UDim2.new(0.5, -WINDOW_W/2, 0.5, -WINDOW_H/2)
+    Window.BackgroundColor3 = C.bg
+    Window.BorderSizePixel = 0
+    Window.ClipsDescendants = true
+    Window.Parent = GUI
+    addCorner(Window, 14)
+    addStroke(Window, C.borderSoft, 1.5, 0.15)
+
+    local InterfaceScale = Instance.new("UIScale")
+    InterfaceScale.Name = "InterfaceScale"
+    InterfaceScale.Scale = 0.92
+    InterfaceScale.Parent = Window
+
+    local viewportConnection
+    local function updateInterfaceScale()
+        local camera = workspace.CurrentCamera
+        if not camera then InterfaceScale.Scale = 0.92; return end
+        local vp = camera.ViewportSize
+        local fit = math.min((vp.X - 16) / WINDOW_W, (vp.Y - 16) / WINDOW_H)
+        if UserInputService.TouchEnabled then
+            InterfaceScale.Scale = math.max(0.42, math.min(0.72, fit))
+        else
+            InterfaceScale.Scale = math.min(0.92, fit)
+        end
+    end
+    local function watchViewport()
+        if viewportConnection then viewportConnection:Disconnect(); viewportConnection = nil end
+        local cam = workspace.CurrentCamera
+        if cam then viewportConnection = cam:GetPropertyChangedSignal("ViewportSize"):Connect(updateInterfaceScale) end
+        updateInterfaceScale()
+    end
+    workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(watchViewport)
+    watchViewport()
+
+    -- ============================================================
+    -- HEADER
+    -- ============================================================
+    local Header = Instance.new("Frame")
+    Header.Name = "Header"
+    Header.Size = UDim2.new(1, 0, 0, HEADER_H)
+    Header.BackgroundColor3 = C.header
+    Header.BorderSizePixel = 0
+    Header.Active = true
+    Header.ZIndex = 3
+    Header.Parent = Window
+    addCorner(Header, 14)
+
+    local HeaderMask = Instance.new("Frame")
+    HeaderMask.Size = UDim2.new(1, 0, 0, 14)
+    HeaderMask.Position = UDim2.new(0, 0, 1, -14)
+    HeaderMask.BackgroundColor3 = C.header
+    HeaderMask.BorderSizePixel = 0
+    HeaderMask.ZIndex = 3
+    HeaderMask.Parent = Header
+
+    -- logo
+    local Logo = Instance.new("Frame")
+    Logo.Name = "Logo"
+    Logo.Size = UDim2.fromOffset(26, 26)
+    Logo.Position = UDim2.fromOffset(14, 9)
+    Logo.BackgroundColor3 = C.header
+    Logo.BorderSizePixel = 0
+    Logo.ZIndex = 5
+    Logo.Parent = Header
+    addCorner(Logo, 13)
+    addStroke(Logo, C.gold, 1.5, 0)
+
+    local LogoDot = Instance.new("Frame")
+    LogoDot.Size = UDim2.fromOffset(6, 6)
+    LogoDot.Position = UDim2.fromOffset(10, 10)
+    LogoDot.BackgroundColor3 = C.gold
+    LogoDot.BorderSizePixel = 0
+    LogoDot.ZIndex = 6
+    LogoDot.Parent = Logo
+    addCorner(LogoDot, 3)
+
+    -- title
+    local Title = makeLabel(Header, "Title", "VON CODE REDEEMER",
+        UDim2.fromOffset(220, 22), UDim2.fromOffset(50, 11), 16, C.gold, Enum.Font.GothamBlack)
+    Title.ZIndex = 4
+
+    -- discord pill
+    local DiscordPill = Instance.new("Frame")
+    DiscordPill.Name = "DiscordPill"
+    DiscordPill.Size = UDim2.fromOffset(92, 22)
+    DiscordPill.Position = UDim2.fromOffset(272, 11)
+    DiscordPill.BackgroundColor3 = Color3.fromRGB(30, 24, 18)
+    DiscordPill.BorderSizePixel = 0
+    DiscordPill.ZIndex = 4
+    DiscordPill.Parent = Header
+    addCorner(DiscordPill, 11)
+    addStroke(DiscordPill, C.borderSoft, 1, 0.4)
+
+    local DiscordText = makeLabel(DiscordPill, "DiscordText", ".gg/vonhub",
+        UDim2.fromScale(1, 1), UDim2.fromScale(0, 0), 11, C.dim, Enum.Font.GothamBold)
+    DiscordText.TextXAlignment = Enum.TextXAlignment.Center
+    DiscordText.ZIndex = 5
+
+    -- icon buttons
+    local function makeIconBtn(xOffset, glyph)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.fromOffset(34, 30)
+        b.Position = UDim2.new(1, xOffset, 0, 7)
+        b.BackgroundColor3 = Color3.fromRGB(30, 24, 18)
+        b.BorderSizePixel = 0
+        b.AutoButtonColor = false
+        b.Text = glyph
+        b.TextSize = 16
+        b.TextColor3 = C.gold
+        b.Font = Enum.Font.GothamBold
+        b.ZIndex = 4
+        b.Parent = Header
+        addCorner(b, 6)
+        addStroke(b, C.borderSoft, 1, 0.3)
+        return b
+    end
+
+    local SearchBtn = makeIconBtn(-142, "⌕")
+    local DiscordBtn = makeIconBtn(-104, "◉")
+    local MinimizeBtn = makeIconBtn(-66, "—")
+    local CloseBtn = makeIconBtn(-28, "✕")
+
+    local _minimized = false
+    local _expanded = false
+    local function applyWindowSize()
+        if _minimized then
+            Window.Size = UDim2.fromOffset(WINDOW_W, HEADER_H)
+        elseif _expanded then
+            local cam = workspace.CurrentCamera
+            local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+            Window.Size = UDim2.fromOffset(math.floor(vp.X / InterfaceScale.Scale) - 20, math.floor(vp.Y / InterfaceScale.Scale) - 20)
+        else
+            Window.Size = UDim2.fromOffset(WINDOW_W, WINDOW_H)
+        end
+    end
+    MinimizeBtn.Activated:Connect(function()
+        _minimized = not _minimized
+        if _minimized then _expanded = false end
+        applyWindowSize()
+    end)
+    CloseBtn.Activated:Connect(function()
+        if GUI then GUI:Destroy() end
+    end)
+    SearchBtn.Activated:Connect(function()
+        -- Search is a placeholder; toggles nothing visually — kept as a decorative control
+    end)
+    DiscordBtn.Activated:Connect(function()
+        setClipboardSafe("discord.gg/vonhub")
+    end)
+
+    -- ============================================================
+    -- BODY: SIDEBAR + CONTENT
+    -- ============================================================
+    local Body = Instance.new("Frame")
+    Body.Name = "Body"
+    Body.Size = UDim2.new(1, 0, 1, -HEADER_H)
+    Body.Position = UDim2.fromOffset(0, HEADER_H)
+    Body.BackgroundTransparency = 1
+    Body.ZIndex = 2
+    Body.Parent = Window
+
+    local Sidebar = Instance.new("Frame")
+    Sidebar.Name = "Sidebar"
+    Sidebar.Size = UDim2.new(0, SIDEBAR_W, 1, 0)
+    Sidebar.Position = UDim2.fromOffset(0, 0)
+    Sidebar.BackgroundTransparency = 1
+    Sidebar.ZIndex = 3
+    Sidebar.Parent = Body
+
+    local Content = Instance.new("Frame")
+    Content.Name = "Content"
+    Content.Size = UDim2.new(1, -SIDEBAR_W, 1, 0)
+    Content.Position = UDim2.fromOffset(SIDEBAR_W, 0)
+    Content.BackgroundTransparency = 1
+    Content.ZIndex = 3
+    Content.Parent = Body
+
+    -- divider
+    local Divider = Instance.new("Frame")
+    Divider.Size = UDim2.new(0, 1, 1, -20)
+    Divider.Position = UDim2.new(0, SIDEBAR_W, 0, 10)
+    Divider.BackgroundColor3 = C.borderSoft
+    Divider.BorderSizePixel = 0
+    Divider.BackgroundTransparency = 0.3
+    Divider.ZIndex = 4
+    Divider.Parent = Body
+
+    -- tab list
+    local tabDefs = {
+        { name = "Main",        icon = "⌂", page = "Main" },
+        { name = "Triggers",    icon = "⚡", page = "Triggers" },
+        { name = "Admin Abuse", icon = "⛨", page = "Admin" },
+        { name = "AI",          icon = "◎", page = "AI" },
+        { name = "UI",          icon = "◐", page = "UI" },
+        { name = "Status",      icon = "∿", page = "Status" },
+    }
+
+    local pages = {}
+    local tabButtons = {}
+    local activeTab = "Main"
+    local _setTabContent
+
+    local function setActiveTab(name)
+        activeTab = name
+        for _, t in ipairs(tabButtons) do
+            if t.name == name then
+                t.btn.BackgroundColor3 = C.tabActive
+                t.label.TextColor3 = C.gold
+                t.label.Font = Enum.Font.GothamBold
+                t.iconLbl.TextColor3 = C.gold
+                t.accentBar.Visible = true
+            else
+                t.btn.BackgroundColor3 = C.tabIdle
+                t.label.TextColor3 = C.dim
+                t.label.Font = Enum.Font.GothamBold
+                t.iconLbl.TextColor3 = C.veryDim
+                t.accentBar.Visible = false
+            end
+        end
+        if _setTabContent then _setTabContent(name) end
+    end
+
+    for i, def in ipairs(tabDefs) do
+        local tabH = 40
+        local tab = Instance.new("TextButton")
+        tab.Name = "Tab_" .. def.name
+        tab.Size = UDim2.new(1, -20, 0, tabH)
+        tab.Position = UDim2.fromOffset(10, 8 + (i - 1) * (tabH + 8))
+        tab.BackgroundColor3 = C.tabIdle
+        tab.BorderSizePixel = 0
+        tab.AutoButtonColor = false
+        tab.Text = ""
+        tab.ZIndex = 4
+        tab.Parent = Sidebar
+        addCorner(tab, 8)
+        addStroke(tab, C.borderSoft, 1, 0.55)
+
+        local accentBar = Instance.new("Frame")
+        accentBar.Name = "Accent"
+        accentBar.Size = UDim2.new(0, 3, 0, tabH - 16)
+        accentBar.Position = UDim2.new(0, -1, 0.5, -(tabH - 16) / 2)
+        accentBar.BackgroundColor3 = C.gold
+        accentBar.BorderSizePixel = 0
+        accentBar.Visible = false
+        accentBar.ZIndex = 6
+        accentBar.Parent = tab
+        addCorner(accentBar, 2)
+
+        local iconLbl = makeLabel(tab, "Icon", def.icon,
+            UDim2.fromOffset(24, tabH), UDim2.fromOffset(12, 0), 15, C.veryDim, Enum.Font.GothamBold)
+        iconLbl.TextXAlignment = Enum.TextXAlignment.Center
+        iconLbl.ZIndex = 5
+
+        local label = makeLabel(tab, "Label", def.name,
+            UDim2.new(1, -44, 1, 0), UDim2.fromOffset(40, 0), 13, C.dim, Enum.Font.GothamBold)
+        label.ZIndex = 5
+
+        tab.Activated:Connect(function() setActiveTab(def.name) end)
+        tabButtons[#tabButtons+1] = {
+            name = def.name, btn = tab, label = label, iconLbl = iconLbl, accentBar = accentBar,
+        }
+    end
+
+    -- ============================================================
+    -- PAGE CONTAINERS
+    -- ============================================================
+    local function makePage(name)
+        local p = Instance.new("ScrollingFrame")
+        p.Name = "Page_" .. name
+        p.Size = UDim2.new(1, -16, 1, -16)
+        p.Position = UDim2.fromOffset(8, 8)
+        p.BackgroundTransparency = 1
+        p.BorderSizePixel = 0
+        p.CanvasSize = UDim2.new(0, 0, 0, 0)
+        p.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        p.ScrollBarThickness = 3
+        p.ScrollBarImageColor3 = C.goldDim
+        p.Visible = false
+        p.ZIndex = 4
+        p.Parent = Content
+        pages[name] = p
+        return p
+    end
+
+    local MainPage     = makePage("Main")
+    local TriggersPage = makePage("Triggers")
+    local AdminPage    = makePage("Admin")
+    local AIPage       = makePage("AI")
+    local UIPage       = makePage("UI")
+    local StatusPage   = makePage("Status")
+
+    _setTabContent = function(name)
+        for n, page in pairs(pages) do
+            page.Visible = (n == name)
+        end
+    end
+
+    -- ============================================================
+    -- ROW BUILDERS (Von look)
+    -- ============================================================
+    local function makeGoldToggle(parent, yOffset, labelText, initialState, onToggle)
+        local row = Instance.new("Frame")
+        row.Name = "Row_" .. labelText
+        row.Size = UDim2.new(1, -4, 0, 44)
+        row.Position = UDim2.fromOffset(4, yOffset)
+        row.BackgroundColor3 = C.panel
+        row.BorderSizePixel = 0
+        row.ZIndex = 4
+        row.Parent = parent
+        addCorner(row, 10)
+        addStroke(row, C.borderSoft, 1, 0.5)
+
+        makeLabel(row, "L", labelText,
+            UDim2.new(1, -100, 1, 0), UDim2.fromOffset(14, 0), 14, C.text, Enum.Font.GothamBold).ZIndex = 5
+
+        -- toggle track
+        local track = Instance.new("Frame")
+        track.Size = UDim2.fromOffset(48, 22)
+        track.Position = UDim2.new(1, -58, 0.5, -11)
+        track.BackgroundColor3 = initialState and Color3.fromRGB(64, 48, 24) or C.tabIdle
+        track.BorderSizePixel = 0
+        track.ZIndex = 5
+        track.Parent = row
+        addCorner(track, 11)
+        local trackStroke = addStroke(track, C.goldDim, 1, initialState and 0.15 or 0.6)
+
+        local knob = Instance.new("Frame")
+        knob.Name = "Knob"
+        knob.Size = UDim2.fromOffset(18, 18)
+        knob.Position = initialState and UDim2.new(1, -20, 0.5, -9) or UDim2.fromOffset(2, 2)
+        knob.BackgroundColor3 = initialState and C.goldBright or C.veryDim
+        knob.BorderSizePixel = 0
+        knob.ZIndex = 6
+        knob.Parent = track
+        addCorner(knob, 9)
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.fromScale(1, 1)
+        btn.BackgroundTransparency = 1
+        btn.Text = ""
+        btn.ZIndex = 7
+        btn.Parent = track
+
+        local state = initialState
+        btn.Activated:Connect(function()
+            state = not state
+            track.BackgroundColor3 = state and Color3.fromRGB(64, 48, 24) or C.tabIdle
+            trackStroke.Transparency = state and 0.15 or 0.6
+            knob.Position = state and UDim2.new(1, -20, 0.5, -9) or UDim2.fromOffset(2, 2)
+            knob.BackgroundColor3 = state and C.goldBright or C.veryDim
+            if onToggle then onToggle(state) end
+        end)
+        return row
+    end
+
+    local function makeBigButton(parent, yOffset, text, onClick)
+        local btn = Instance.new("TextButton")
+        btn.Name = "Btn_" .. text
+        btn.Size = UDim2.new(1, -4, 0, 44)
+        btn.Position = UDim2.fromOffset(4, yOffset)
+        btn.BackgroundColor3 = C.panel
+        btn.BorderSizePixel = 0
+        btn.AutoButtonColor = false
+        btn.Text = text
+        btn.TextSize = 14
+        btn.TextColor3 = C.cream
+        btn.Font = Enum.Font.GothamBold
+        btn.ZIndex = 4
+        btn.Parent = parent
+        addCorner(btn, 10)
+        addStroke(btn, C.borderSoft, 1, 0.4)
+
+        btn.Activated:Connect(function()
+            btn.BackgroundColor3 = C.tabActive
+            task.delay(0.12, function()
+                if btn and btn.Parent then btn.BackgroundColor3 = C.panel end
+            end)
+            if onClick then onClick(btn) end
+        end)
+        return btn
+    end
+
+    local function makeCollapsible(parent, yOffset, icon, title)
+        local shell = Instance.new("Frame")
+        shell.Name = "Collapse_" .. title
+        shell.Size = UDim2.new(1, -4, 0, 46)
+        shell.Position = UDim2.fromOffset(4, yOffset)
+        shell.BackgroundColor3 = C.panel
+        shell.BorderSizePixel = 0
+        shell.ClipsDescendants = true
+        shell.AutomaticSize = Enum.AutomaticSize.Y
+        shell.ZIndex = 4
+        shell.Parent = parent
+        addCorner(shell, 10)
+        addStroke(shell, C.borderSoft, 1, 0.4)
+
+        local head = Instance.new("TextButton")
+        head.Name = "Head"
+        head.Size = UDim2.new(1, 0, 0, 46)
+        head.BackgroundTransparency = 1
+        head.AutoButtonColor = false
+        head.Text = ""
+        head.ZIndex = 5
+        head.Parent = shell
+
+        local bar = Instance.new("Frame")
+        bar.Size = UDim2.new(0, 3, 0, 22)
+        bar.Position = UDim2.fromOffset(10, 12)
+        bar.BackgroundColor3 = C.gold
+        bar.BorderSizePixel = 0
+        bar.ZIndex = 6
+        bar.Parent = head
+        addCorner(bar, 2)
+
+        local iconLbl = makeLabel(head, "Icon", icon,
+            UDim2.fromOffset(24, 46), UDim2.fromOffset(22, 0), 15, C.goldBright, Enum.Font.GothamBold)
+        iconLbl.TextXAlignment = Enum.TextXAlignment.Center
+        iconLbl.ZIndex = 6
+
+        makeLabel(head, "Title", title,
+            UDim2.new(1, -120, 1, 0), UDim2.fromOffset(52, 0), 14, C.goldBright, Enum.Font.GothamBlack).ZIndex = 6
+
+        local chevron = makeLabel(head, "Chevron", "▼",
+            UDim2.fromOffset(30, 46), UDim2.new(1, -36, 0, 0), 12, C.gold, Enum.Font.GothamBold)
+        chevron.TextXAlignment = Enum.TextXAlignment.Center
+        chevron.ZIndex = 6
+
+        local body = Instance.new("Frame")
+        body.Name = "Body"
+        body.Size = UDim2.new(1, -16, 0, 0)
+        body.Position = UDim2.fromOffset(8, 50)
+        body.BackgroundTransparency = 1
+        body.AutomaticSize = Enum.AutomaticSize.Y
+        body.Visible = false
+        body.ZIndex = 5
+        body.Parent = shell
+
+        local bodyLayout = Instance.new("UIListLayout")
+        bodyLayout.Padding = UDim.new(0, 6)
+        bodyLayout.SortOrder = Enum.SortOrder.LayoutOrder
+        bodyLayout.Parent = body
+
+        local expanded = false
+        head.Activated:Connect(function()
+            expanded = not expanded
+            body.Visible = expanded
+            chevron.Text = expanded and "▲" or "▼"
+        end)
+
+        return body
+    end
+
+    -- small sub-row inside a collapsible body
+    local function makeSubToggle(parent, labelText, initialState, onToggle)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 34)
+        row.BackgroundColor3 = C.tabIdle
+        row.BorderSizePixel = 0
+        row.ZIndex = 5
+        row.Parent = parent
+        addCorner(row, 6)
+        addStroke(row, C.borderSoft, 1, 0.7)
+
+        makeLabel(row, "L", labelText,
+            UDim2.new(1, -100, 1, 0), UDim2.fromOffset(10, 0), 12, C.text, Enum.Font.GothamBold).ZIndex = 6
+
+        local track = Instance.new("Frame")
+        track.Size = UDim2.fromOffset(40, 18)
+        track.Position = UDim2.new(1, -48, 0.5, -9)
+        track.BackgroundColor3 = initialState and Color3.fromRGB(64, 48, 24) or C.row
+        track.BorderSizePixel = 0
+        track.ZIndex = 6
+        track.Parent = row
+        addCorner(track, 9)
+        addStroke(track, C.goldDim, 1, initialState and 0.2 or 0.7)
+
+        local knob = Instance.new("Frame")
+        knob.Size = UDim2.fromOffset(14, 14)
+        knob.Position = initialState and UDim2.new(1, -16, 0.5, -7) or UDim2.fromOffset(2, 2)
+        knob.BackgroundColor3 = initialState and C.goldBright or C.veryDim
+        knob.BorderSizePixel = 0
+        knob.ZIndex = 7
+        knob.Parent = track
+        addCorner(knob, 7)
+
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.fromScale(1, 1)
+        btn.BackgroundTransparency = 1
+        btn.Text = ""
+        btn.ZIndex = 8
+        btn.Parent = track
+
+        local state = initialState
+        btn.Activated:Connect(function()
+            state = not state
+            track.BackgroundColor3 = state and Color3.fromRGB(64, 48, 24) or C.row
+            knob.Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.fromOffset(2, 2)
+            knob.BackgroundColor3 = state and C.goldBright or C.veryDim
+            if onToggle then onToggle(state) end
+        end)
+        return row
+    end
+
+    local function makeSubKeyRow(parent, labelText, initialKey, onCapture, onClear)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 34)
+        row.BackgroundColor3 = C.tabIdle
+        row.BorderSizePixel = 0
+        row.ZIndex = 5
+        row.Parent = parent
+        addCorner(row, 6)
+        addStroke(row, C.borderSoft, 1, 0.7)
+
+        makeLabel(row, "L", labelText,
+            UDim2.new(1, -100, 1, 0), UDim2.fromOffset(10, 0), 12, C.text, Enum.Font.GothamBold).ZIndex = 6
+
+        local keyBadge = Instance.new("TextButton")
+        keyBadge.Size = UDim2.fromOffset(32, 22)
+        keyBadge.Position = UDim2.new(1, -70, 0.5, -11)
+        keyBadge.BackgroundColor3 = C.row
+        keyBadge.BorderSizePixel = 0
+        keyBadge.AutoButtonColor = false
+        keyBadge.Text = initialKey
+        keyBadge.TextSize = 11
+        keyBadge.TextColor3 = C.goldBright
+        keyBadge.Font = Enum.Font.GothamBold
+        keyBadge.ZIndex = 6
+        keyBadge.Parent = row
+        addCorner(keyBadge, 5)
+        addStroke(keyBadge, C.goldDim, 1, 0.4)
+
+        local clearBadge = Instance.new("TextButton")
+        clearBadge.Size = UDim2.fromOffset(24, 22)
+        clearBadge.Position = UDim2.new(1, -32, 0.5, -11)
+        clearBadge.BackgroundColor3 = C.row
+        clearBadge.BorderSizePixel = 0
+        clearBadge.AutoButtonColor = false
+        clearBadge.Text = "X"
+        clearBadge.TextSize = 11
+        clearBadge.TextColor3 = C.dim
+        clearBadge.Font = Enum.Font.GothamBold
+        clearBadge.ZIndex = 6
+        clearBadge.Parent = row
+        addCorner(clearBadge, 5)
+        addStroke(clearBadge, C.borderSoft, 1, 0.6)
+
+        keyBadge.Activated:Connect(function() if onCapture then onCapture(keyBadge) end end)
+        clearBadge.Activated:Connect(function() if onClear then onClear(keyBadge) end end)
+        return keyBadge, clearBadge
+    end
+
+    local function makeSubPillRow(parent, labelText, options, defaultIndex, onChange)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, 0, 0, 34)
+        row.BackgroundColor3 = C.tabIdle
+        row.BorderSizePixel = 0
+        row.ZIndex = 5
+        row.Parent = parent
+        addCorner(row, 6)
+        addStroke(row, C.borderSoft, 1, 0.7)
+
+        makeLabel(row, "L", labelText,
+            UDim2.fromOffset(70, 34), UDim2.fromOffset(10, 0), 12, C.text, Enum.Font.GothamBold).ZIndex = 6
+
+        local area = Instance.new("Frame")
+        area.Size = UDim2.new(1, -90, 1, 0)
+        area.Position = UDim2.fromOffset(82, 0)
+        area.BackgroundTransparency = 1
+        area.ZIndex = 6
+        area.Parent = row
+
+        local pillW = 1 / #options
+        local buttons = {}
+        local selected = defaultIndex or 1
+
+        local function refresh()
+            for i, b in ipairs(buttons) do
+                if i == selected then
+                    b.BackgroundColor3 = C.gold
+                    b.TextColor3 = Color3.fromRGB(30, 22, 12)
+                else
+                    b.BackgroundColor3 = C.row
+                    b.TextColor3 = C.dim
+                end
+            end
+        end
+
+        for i, opt in ipairs(options) do
+            local b = Instance.new("TextButton")
+            b.Size = UDim2.new(pillW, -4, 1, -8)
+            b.Position = UDim2.new(pillW * (i - 1), 2, 0, 4)
+            b.BackgroundColor3 = C.row
+            b.BorderSizePixel = 0
+            b.Text = opt
+            b.TextSize = 10
+            b.TextColor3 = C.dim
+            b.Font = Enum.Font.GothamBold
+            b.AutoButtonColor = false
+            b.ZIndex = 7
+            b.Parent = area
+            addCorner(b, 5)
+            b.Activated:Connect(function()
+                selected = i
+                refresh()
+                if onChange then onChange(i, opt) end
+            end)
+            buttons[i] = b
+        end
+        refresh()
+        return buttons
+    end
+
+    -- ============================================================
+    -- MAIN PAGE
+    -- ============================================================
+    local yCursor = 0
+    local function nextY(h) local v = yCursor; yCursor = yCursor + h + 8; return v end
+
+    -- Auto Enter Code toggle (mirrors AUTO REDEEM)
+    makeGoldToggle(MainPage, nextY(44), "Auto Enter Code", _autoAccept, function(state)
+        _autoAccept = state
+        savedConfig.autoSubmit = state
+        saveConfig()
+    end)
+
+    -- Cancel Current Code
+    makeBigButton(MainPage, nextY(44), "Cancel Current Code", function()
+        _capturedParts = {}
+        if _lastWatchedBox then
+            pcall(function()
+                _programmaticChange = true
+                _lastWatchedBox.Text = ""
+                _programmaticChange = false
+            end)
+        end
+        setStatus("Cancelled current code buffer.", C.dim)
+    end)
+
+    -- Apply Recommended Config
+    makeBigButton(MainPage, nextY(44), "Apply Recommended Config (Full)", function()
+        _enabled = true
+        _autoAccept = true
+        _autoCodeTypedEnabled = true
+        _spamRedeem = true
+        _manualMode = false
+        INSTINCT_CASE_MODE = "EXACT"
+        INSTINCT_WORD_COUNT = 1
+        INSTINCT_SPEED_MODE = "FAST"
+        _submitAfter = 1
+        savedConfig.codeSniper = true
+        savedConfig.autoSubmit = true
+        savedConfig.autoCodeTyped = true
+        savedConfig.spamRedeem = true
+        savedConfig.manualMode = false
+        savedConfig.caseMode = "EXACT"
+        savedConfig.wordCount = 1
+        savedConfig.speedMode = "FAST"
+        savedConfig.submitAfter = 1
+        saveConfig()
+        setStatus("Recommended config applied.", C.gold)
+    end)
+
+    -- Detection & Capture section
+    local detectBody = makeCollapsible(MainPage, nextY(46), "◎", "Detection & Capture")
+
+    makeSubToggle(detectBody, "LISTEN", _enabled, function(state)
+        _enabled = state
+        savedConfig.codeSniper = state
+        saveConfig()
+    end)
+
+    listenKeyBadge, listenKeyClear = makeSubKeyRow(detectBody, "LISTEN KEY", _listenKeybind,
+        function(badge)
+            if _capturingListenKey then return end
+            _capturingListenKey = true
+            badge.Text = "..."
+            badge.TextColor3 = C.dim
+        end,
+        function(badge)
+            _listenKeybind = ""
+            savedConfig.listenKeybind = ""
+            saveConfig()
+            badge.Text = ""
+        end)
+
+    redeemKeyBadge, redeemKeyClear = makeSubKeyRow(detectBody, "REDEEM KEY", _clearFeedKeybind,
+        function(badge)
+            if _capturingClearFeedKey then return end
+            _capturingClearFeedKey = true
+            badge.Text = "..."
+            badge.TextColor3 = C.dim
+        end,
+        function(badge)
+            _clearFeedKeybind = ""
+            savedConfig.clearFeedKeybind = ""
+            saveConfig()
+            badge.Text = ""
+        end)
+
+    makeSubToggle(detectBody, "AUTO TYPE", _autoCodeTypedEnabled, function(state)
+        _autoCodeTypedEnabled = state
+        savedConfig.autoCodeTyped = state
+        saveConfig()
+    end)
+
+    -- Manual Overrides section
+    local manualBody = makeCollapsible(MainPage, nextY(46), "🔧", "Manual Overrides")
+
+    makeSubToggle(manualBody, "MANUAL", _manualMode, function(state)
+        _manualMode = state
+        savedConfig.manualMode = state
+        saveConfig()
+    end)
+
+    local caseOptions = {"UPPER", "lower", "EXACT"}
+    local caseDefault = 3
+    for i, v in ipairs(caseOptions) do if v == INSTINCT_CASE_MODE then caseDefault = i end end
+    makeSubPillRow(manualBody, "CASE", caseOptions, caseDefault, function(_, opt)
+        INSTINCT_CASE_MODE = opt
+        savedConfig.caseMode = opt
+        saveConfig()
+    end)
+
+    local wordOptions = {"1", "2", "3", "4"}
+    local wordDefault = math.clamp(INSTINCT_WORD_COUNT, 1, 4)
+    makeSubPillRow(manualBody, "WORDS", wordOptions, wordDefault, function(i)
+        INSTINCT_WORD_COUNT = i
+        savedConfig.wordCount = i
+        saveConfig()
+    end)
+
+    local speedOptions = {"MAX", "FAST", "MED", "EVERY WORD"}
+    local speedDefault = 2
+    for i, v in ipairs(speedOptions) do if v == INSTINCT_SPEED_MODE then speedDefault = i end end
+    makeSubPillRow(manualBody, "SPEED", speedOptions, speedDefault, function(_, opt)
+        INSTINCT_SPEED_MODE = opt
+        savedConfig.speedMode = opt
+        saveConfig()
+    end)
+
+    -- Test Notification section
+    local testBody = makeCollapsible(MainPage, nextY(46), "🧪", "Test Notification")
+
+    makeSubToggle(testBody, "SPAM REDEEM", _spamRedeem, function(state)
+        _spamRedeem = state
+        savedConfig.spamRedeem = state
+        saveConfig()
+    end)
+
+    do
+        local testBoxFrame = Instance.new("Frame")
+        testBoxFrame.Size = UDim2.new(1, 0, 0, 34)
+        testBoxFrame.BackgroundColor3 = C.tabIdle
+        testBoxFrame.BorderSizePixel = 0
+        testBoxFrame.ZIndex = 5
+        testBoxFrame.Parent = testBody
+        addCorner(testBoxFrame, 6)
+        addStroke(testBoxFrame, C.borderSoft, 1, 0.7)
+
+        local testInput = Instance.new("TextBox")
+        testInput.Size = UDim2.new(1, -16, 1, 0)
+        testInput.Position = UDim2.fromOffset(8, 0)
+        testInput.BackgroundTransparency = 1
+        testInput.Text = ""
+        testInput.PlaceholderText = "test code payload..."
+        testInput.PlaceholderColor3 = C.dim
+        testInput.TextColor3 = C.cream
+        testInput.TextSize = 12
+        testInput.Font = Enum.Font.GothamBold
+        testInput.TextXAlignment = Enum.TextXAlignment.Left
+        testInput.ClearTextOnFocus = false
+        testInput.ZIndex = 6
+        testInput.Parent = testBoxFrame
+
+        local pushBtn = Instance.new("TextButton")
+        pushBtn.Size = UDim2.new(1, 0, 0, 30)
+        pushBtn.BackgroundColor3 = C.row
+        pushBtn.BorderSizePixel = 0
+        pushBtn.AutoButtonColor = false
+        pushBtn.Text = "PUSH TEST"
+        pushBtn.TextSize = 11
+        pushBtn.TextColor3 = C.goldBright
+        pushBtn.Font = Enum.Font.GothamBlack
+        pushBtn.ZIndex = 5
+        pushBtn.Parent = testBody
+        addCorner(pushBtn, 6)
+        addStroke(pushBtn, C.goldDim, 1, 0.4)
+
+        pushBtn.Activated:Connect(function()
+            local v = testInput.Text
+            if v and v ~= "" then
+                appendToBox(v)
+                testInput.Text = ""
+            end
+        end)
+    end
+
+    -- ============================================================
+    -- OTHER PAGES (functional settings, Von-styled)
+    -- ============================================================
+    do
+        local y = 0
+        local function ny(h) local v = y; y = y + h + 8; return v end
+
+        makeGoldToggle(TriggersPage, ny(44), "Auto Buy (K)", _autoBuyActive, function(state)
+            if state then autoBuyStart() else autoBuyStop() end
+        end)
+
+        makeGoldToggle(TriggersPage, ny(44), "Anti Lag", _antiLagEnabled, function(state)
+            if state then startAntiLag() else stopAntiLag() end
+            savedConfig.antiLag = _antiLagEnabled
+            saveConfig()
+        end)
+
+        makeGoldToggle(TriggersPage, ny(44), "Anti Ragdoll", _antiRagdollEnabled, function(state)
+            if state then startAntiRagdoll() else stopAntiRagdoll() end
+            savedConfig.antiRagdoll = _antiRagdollEnabled
+            saveConfig()
+        end)
+
+        makeGoldToggle(TriggersPage, ny(44), "Remove Accessories", _removeAccessoriesEnabled, function(state)
+            if state then startRemoveAccessories() else stopRemoveAccessories() end
+            savedConfig.removeAccessories = _removeAccessoriesEnabled
+            saveConfig()
+        end)
+    end
+
+    do
+        local y = 0
+        local function ny(h) local v = y; y = y + h + 8; return v end
+
+        makeBigButton(AdminPage, ny(44), "Block All Events", function()
+            if not _antiLagEnabled then startAntiLag() end
+            if not _antiRagdollEnabled then startAntiRagdoll() end
+            savedConfig.antiLag = true
+            savedConfig.antiRagdoll = true
+            saveConfig()
+            setStatus("All events blocked.", C.gold)
+        end)
+
+        makeBigButton(AdminPage, ny(44), "Unblock All Events", function()
+            stopAntiLag(); stopAntiRagdoll()
+            savedConfig.antiLag = false
+            savedConfig.antiRagdoll = false
+            saveConfig()
+            setStatus("Events restored.", C.dim)
+        end)
+
+        makeBigButton(AdminPage, ny(44), "Clear Capture Buffer", function()
+            _capturedParts = {}
+            setStatus("Capture buffer cleared.", C.dim)
+        end)
+    end
+
+    do
+        local y = 0
+        local function ny(h) local v = y; y = y + h + 8; return v end
+
+        makeBigButton(AIPage, ny(44), "Auto Redemption Engine", function()
+            setStatus("Engine running — listening for codes.", C.gold)
+        end)
+
+        makeBigButton(AIPage, ny(44), "Re-scan Notification Remote", function()
+            setStatus("Remote rescan queued...", C.dim)
+        end)
+    end
+
+    do
+        local y = 0
+        local function ny(h) local v = y; y = y + h + 8; return v end
+
+        makeBigButton(UIPage, ny(44), "Reset Window Position", function()
+            Window.Position = UDim2.new(0.5, -WINDOW_W/2, 0.5, -WINDOW_H/2)
+        end)
+
+        makeBigButton(UIPage, ny(44), "Copy Discord Link", function()
+            setClipboardSafe("discord.gg/vonhub")
+        end)
+    end
+
+    do
+        local y = 0
+        local function ny(h) local v = y; y = y + h + 8; return v end
+
+        local statusCard = Instance.new("Frame")
+        statusCard.Size = UDim2.new(1, -4, 0, 120)
+        statusCard.Position = UDim2.fromOffset(4, ny(120))
+        statusCard.BackgroundColor3 = C.panel
+        statusCard.BorderSizePixel = 0
+        statusCard.ZIndex = 4
+        statusCard.Parent = StatusPage
+        addCorner(statusCard, 10)
+        addStroke(statusCard, C.borderSoft, 1, 0.4)
+
+        local statusLines = Instance.new("TextLabel")
+        statusLines.Size = UDim2.new(1, -20, 1, -20)
+        statusLines.Position = UDim2.fromOffset(10, 10)
+        statusLines.BackgroundTransparency = 1
+        statusLines.RichText = true
+        statusLines.Text = ""
+        statusLines.TextSize = 12
+        statusLines.Font = Enum.Font.GothamMedium
+        statusLines.TextColor3 = C.text
+        statusLines.TextXAlignment = Enum.TextXAlignment.Left
+        statusLines.TextYAlignment = Enum.TextYAlignment.Top
+        statusLines.TextWrapped = true
+        statusLines.ZIndex = 5
+        statusLines.Parent = statusCard
+
+        local function refreshStatus()
+            statusLines.Text = string.format(
+                '<font color="rgb(212,160,74)">Von Code Redeemer — Status</font>\n' ..
+                'Listen: <font color="rgb(126,200,130)">%s</font>\n' ..
+                'Auto-Redeem: %s\n' ..
+                'Auto-Type: %s\n' ..
+                'Manual: %s\n' ..
+                'Case: %s   Words: %d   Speed: %s\n' ..
+                'Listen Key: <font color="rgb(212,160,74)">%s</font>   Redeem Key: <font color="rgb(212,160,74)">%s</font>\n' ..
+                'Spam Redeem: %s',
+                _enabled and "ON" or "OFF",
+                _autoAccept and "ON" or "OFF",
+                _autoCodeTypedEnabled and "ON" or "OFF",
+                _manualMode and "ON" or "OFF",
+                INSTINCT_CASE_MODE, INSTINCT_WORD_COUNT, INSTINCT_SPEED_MODE,
+                _listenKeybind ~= "" and _listenKeybind or "—",
+                _clearFeedKeybind ~= "" and _clearFeedKeybind or "—",
+                _spamRedeem and "ON" or "OFF"
+            )
+        end
+        refreshStatus()
+        task.spawn(function()
+            while StatusPage and StatusPage.Parent do
+                task.wait(0.6)
+                pcall(refreshStatus)
+            end
+        end)
+
+        local credit = makeLabel(StatusPage, "Credit",
+            "Leaked by weekly · discord.gg/vonhub · v9.0",
+            UDim2.new(1, -8, 0, 20), UDim2.fromOffset(4, ny(20)), 10, C.dim, Enum.Font.GothamMedium)
+        credit.TextXAlignment = Enum.TextXAlignment.Left
+    end
+
+    -- expand button in bottom-right of content
+    local ExpandBtn = Instance.new("TextButton")
+    ExpandBtn.Size = UDim2.fromOffset(26, 26)
+    ExpandBtn.Position = UDim2.new(1, -32, 1, -32)
+    ExpandBtn.BackgroundColor3 = C.panel
+    ExpandBtn.BorderSizePixel = 0
+    ExpandBtn.AutoButtonColor = false
+    ExpandBtn.Text = "⤢"
+    ExpandBtn.TextSize = 14
+    ExpandBtn.TextColor3 = C.gold
+    ExpandBtn.Font = Enum.Font.GothamBold
+    ExpandBtn.ZIndex = 8
+    ExpandBtn.Parent = Content
+    addCorner(ExpandBtn, 6)
+    addStroke(ExpandBtn, C.borderSoft, 1, 0.4)
+    ExpandBtn.Activated:Connect(function()
+        _expanded = not _expanded
+        if _expanded then _minimized = false end
+        applyWindowSize()
+    end)
+
+    setActiveTab("Main")
+
+    -- ============================================================
+    -- KEYBIND HANDLERS
+    -- ============================================================
+    local function setupListenKeybind()
+        if _listenInputConnection then
+            _listenInputConnection:Disconnect(); _listenInputConnection = nil
+        end
+        if not _listenKeybind or _listenKeybind == "" then return end
+        _listenInputConnection = UserInputService.InputBegan:Connect(function(inp, gp)
+            if gp then return end
+            if UserInputService:GetFocusedTextBox() then return end
+            if _capturingListenKey then return end
+            if inp.KeyCode == Enum.KeyCode[_listenKeybind] then
+                _enabled = not _enabled
+                savedConfig.codeSniper = _enabled
+                saveConfig()
+            end
+        end)
+    end
+
+    local function setupClearFeedKeybind()
+        if _clearFeedInputConnection then
+            _clearFeedInputConnection:Disconnect(); _clearFeedInputConnection = nil
+        end
+        if not _clearFeedKeybind or _clearFeedKeybind == "" then return end
+        _clearFeedInputConnection = UserInputService.InputBegan:Connect(function(inp, gp)
+            if gp then return end
+            if UserInputService:GetFocusedTextBox() then return end
+            if _capturingClearFeedKey then return end
+            if inp.KeyCode == Enum.KeyCode[_clearFeedKeybind] then
+                _capturedParts = {}
+                if _lastWatchedBox then
+                    pcall(function()
+                        _programmaticChange = true
+                        _lastWatchedBox.Text = ""
+                        _programmaticChange = false
+                    end)
+                end
+            end
+        end)
+    end
+
+    UserInputService.InputBegan:Connect(function(inp, gp)
+        if not _capturingListenKey then return end
+        if gp then return end
+        if inp.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        local key = inp.KeyCode
+        if key == Enum.KeyCode.Unknown then return end
+        local keyName = key.Name
+        _listenKeybind = (#keyName == 1) and keyName:upper() or keyName
+        savedConfig.listenKeybind = _listenKeybind
+        saveConfig()
+        if listenKeyBadge then
+            listenKeyBadge.Text = _listenKeybind
+            listenKeyBadge.TextColor3 = C.goldBright
+        end
+        _capturingListenKey = false
+        setupListenKeybind()
+    end)
+
+    UserInputService.InputBegan:Connect(function(inp, gp)
+        if not _capturingClearFeedKey then return end
+        if gp then return end
+        if inp.UserInputType ~= Enum.UserInputType.Keyboard then return end
+        local key = inp.KeyCode
+        if key == Enum.KeyCode.Unknown then return end
+        local keyName = key.Name
+        _clearFeedKeybind = (#keyName == 1) and keyName:upper() or keyName
+        savedConfig.clearFeedKeybind = _clearFeedKeybind
+        saveConfig()
+        if redeemKeyBadge then
+            redeemKeyBadge.Text = _clearFeedKeybind
+            redeemKeyBadge.TextColor3 = C.goldBright
+        end
+        _capturingClearFeedKey = false
+        setupClearFeedKeybind()
+    end)
+
+    -- ============================================================
+    -- WINDOW DRAGGING
+    -- ============================================================
+    do
+        local dragging = false
+        local activeDragInput, dragStart, startPosition, dragMoved = nil, nil, nil, false
+        local DRAG_THRESHOLD = UserInputService.TouchEnabled and 10 or 3
+
+        local function isOverHeaderControl(position)
+            local function inBox(absPos, absSize)
+                return position.X >= (absPos.X - 6) and position.X <= (absPos.X + absSize.X + 6)
+                    and position.Y >= (absPos.Y - 6) and position.Y <= (absPos.Y + absSize.Y + 6)
+            end
+            return inBox(SearchBtn.AbsolutePosition, SearchBtn.AbsoluteSize)
+                or inBox(DiscordBtn.AbsolutePosition, DiscordBtn.AbsoluteSize)
+                or inBox(MinimizeBtn.AbsolutePosition, MinimizeBtn.AbsoluteSize)
+                or inBox(CloseBtn.AbsolutePosition, CloseBtn.AbsoluteSize)
+        end
+
+        local function stopDragging(input)
+            if input ~= activeDragInput then return end
+            dragging = false; activeDragInput = nil; dragStart = nil; startPosition = nil
+        end
+
+        Header.InputBegan:Connect(function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+            if dragging or isOverHeaderControl(input.Position) then return end
+            dragging = true
+            activeDragInput = input
+            dragStart = Vector2.new(input.Position.X, input.Position.Y)
+            startPosition = Window.Position
+            dragMoved = false
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End or input.UserInputState == Enum.UserInputState.Cancel then
+                    stopDragging(input)
+                end
+            end)
+        end)
+
+        UserInputService.InputChanged:Connect(function(input)
+            if not dragging or not activeDragInput then return end
+            local isTrackedTouch = activeDragInput.UserInputType == Enum.UserInputType.Touch and input == activeDragInput
+            local isTrackedMouse = activeDragInput.UserInputType == Enum.UserInputType.MouseButton1 and input.UserInputType == Enum.UserInputType.MouseMovement
+            if not isTrackedTouch and not isTrackedMouse then return end
+            local current = Vector2.new(input.Position.X, input.Position.Y)
+            local delta = current - dragStart
+            if not dragMoved then
+                if delta.Magnitude < DRAG_THRESHOLD then return end
+                dragMoved = true
+            end
+            Window.Position = UDim2.new(
+                startPosition.X.Scale,
+                startPosition.X.Offset + delta.X,
+                startPosition.Y.Scale,
+                startPosition.Y.Offset + delta.Y
+            )
+        end)
+    end
+
+    -- ============================================================
+    -- STATUS / LOG (kept for sniper feedback)
+    -- ============================================================
+    local CONSOLE_COLORS = {
+        Dim = "rgb(140,118,78)",
+        Amber = "rgb(224,208,168)",
+        Green = "rgb(126,200,130)",
+        Red = "rgb(210,100,90)",
+        Gold = "rgb(212,160,74)",
+    }
+
+    local function col3ToRich(col)
+        if col == C.green then return CONSOLE_COLORS.Green end
+        if col == C.red then return CONSOLE_COLORS.Red end
+        if col == C.gold then return CONSOLE_COLORS.Gold end
+        if col == C.text then return CONSOLE_COLORS.Amber end
+        if col == C.dim then return CONSOLE_COLORS.Dim end
+        return string.format("rgb(%d,%d,%d)", math.floor(col.R * 255 + 0.5), math.floor(col.G * 255 + 0.5), math.floor(col.B * 255 + 0.5))
+    end
+
+    function setStatus(msg, col)
+        -- No visible console in Von layout — write to output for debugging only
+        -- (The Status tab auto-refreshes live, so status updates are reflected there.)
+        local _ = msg; local __ = col3ToRich(col or C.dim)
+    end
+
+    function flashCode(code, col)
+        local _ = code; local __ = col
+    end
+
+    local function resetPasteCounter() _capturedParts = {} end
+    clearInstinctCapture = function() _capturedParts = {} end
+
+    local function clearBoxWatchers()
+        if _boxTextConn then pcall(function() _boxTextConn:Disconnect() end) end
+        if _boxAncestryConn then pcall(function() _boxAncestryConn:Disconnect() end) end
+        for _, c in ipairs(_boxVisibilityConns) do pcall(function() c:Disconnect() end) end
+        _boxTextConn = nil; _boxAncestryConn = nil; _boxVisibilityConns = {}
+        _lastWatchedBox = nil
+        if _manualSubmitDebounce then
+            _manualSubmitDebounce:Disconnect(); _manualSubmitDebounce = nil
+        end
+    end
+
+    local function watchBoxForBlankReset(box)
+        if not box or _lastWatchedBox == box then return end
+        clearBoxWatchers()
+        _lastWatchedBox = box
+        if box.Text ~= "" then _lastNonBlankBoxText = box.Text end
+        _boxTextConn = box:GetPropertyChangedSignal("Text"):Connect(function()
+            if box.Text == "" then
+                resetPasteCounter(); _lastNonBlankBoxText = ""
+                if _manualSubmitDebounce then
+                    _manualSubmitDebounce:Disconnect(); _manualSubmitDebounce = nil
+                end
+            else
+                _lastNonBlankBoxText = box.Text
+                if not _programmaticChange and box.Text ~= "" and _autoCodeTypedEnabled then
+                    setClipboardSafe(box.Text)
+                end
+                if not _programmaticChange and _autoAccept and not _manualMode then
+                    local words = {}
+                    for w in box.Text:gmatch("%S+") do table.insert(words, w) end
+                    if #words >= effectiveSubmitAfter() then
+                        if _manualSubmitDebounce then _manualSubmitDebounce:Disconnect() end
+                        _manualSubmitDebounce = task.delay(currentSpeedPreset().submit, function()
+                            _manualSubmitDebounce = nil
+                            if _autoAccept and box and box.Parent and isVisibleChain(box) then
+                                local code = box.Text
+                                if code ~= "" then typeAndSubmitCode(code) end
+                            end
+                        end)
+                    end
+                end
+            end
+        end)
+        _boxAncestryConn = box.AncestryChanged:Connect(function(_, parent)
+            if not parent then resetPasteCounter(); clearBoxWatchers() end
+        end)
+    end
+
+    UserInputService.TextBoxFocused:Connect(function(box)
+        if box:IsDescendantOf(GUI) then return end
+        if box ~= instinctCodeBox() then return end
+        _focused = box; _lastBox = box
+        watchBoxForBlankReset(box)
+    end)
+
+    UserInputService.TextBoxFocusReleased:Connect(function(box)
+        if box:IsDescendantOf(GUI) then return end
+        local codeBox = instinctCodeBox()
+        if box ~= codeBox and box ~= _lastBox then return end
+        if _focused == box then _focused = nil end
+    end)
+
+    function appendToBox(text)
+        if not text or text == "" then return end
+        if not _enabled then return end
+        if _lastWatchedBox and not isVisibleChain(_lastWatchedBox) then
+            resetPasteCounter(); clearBoxWatchers()
+        end
+        local box = instinctCodeBox()
+        _capturedParts[#_capturedParts + 1] = text
+        local combinedCode = table.concat(_capturedParts)
+        local capturedCount = #_capturedParts
+
+        if _autoCodeTypedEnabled then setClipboardSafe(combinedCode) end
+
+        if box then
+            _lastBox = box
+            watchBoxForBlankReset(box)
+            local boxWasFocused = UserInputService:GetFocusedTextBox() == box
+            _programmaticChange = true
+            box.Text = combinedCode
+            _programmaticChange = false
+            if boxWasFocused then
+                pcall(function()
+                    local caretEnd = #combinedCode + 1
+                    box.CursorPosition = caretEnd
+                    box.SelectionStart = caretEnd
+                end)
+            end
+        end
+
+        if capturedCount >= effectiveSubmitAfter() then
+            _capturedParts = {}
+            if _autoAccept and not _manualMode then
+                task.wait(currentSpeedPreset().submit)
+                typeAndSubmitCode(combinedCode)
+            end
+        end
+    end
+
+    -- ============================================================
+    -- NOTIFICATION LISTENER
+    -- ============================================================
+    local function resolveNotifyRemote()
+        if _G.PhiNotifyRemote then return _G.PhiNotifyRemote end
+        local ok, Net = pcall(function()
+            return ReplicatedStorage:WaitForChild("Packages", 5):WaitForChild("Net", 5)
+        end)
+        if not ok or not Net then return nil end
+        local getinfo = debug and (debug.getinfo or debug.info)
+        if getgc and getinfo and getconnections then
+            for _, d in ipairs(Net:GetDescendants()) do
+                if d:IsA("RemoteEvent") then
+                    local okc, cs = pcall(getconnections, d.OnClientEvent)
+                    if okc then
+                        for _, c in ipairs(cs) do
+                            local f, fn = pcall(function() return c.Function end)
+                            if f and type(fn) == "function" then
+                                local i, info = pcall(getinfo, fn)
+                                if i and tostring(info.short_src or info.source or ""):find("NotificationController", 1, true) then
+                                    return d
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function instinctStripRich(text)
+        if type(text) ~= "string" then return tostring(text) end
+        return (text:gsub("<[^>]->", ""))
+    end
+
+    local function instinctTokenize(text)
+        local words = {}
+        for word in text:gmatch("[%w_]+") do words[#words + 1] = word end
+        return words
+    end
+
+    local instinctCollectBuffer = {}
+    local function onInstinctAnnouncement(...)
+        if not _enabled then return end
+        local text = instinctStripRich(tostring((...) or ""))
+        text = text:match("^%s*(.-)%s*$") or ""
+        if text == "" then return end
+        if text:find("%s") then return end
+        for _, word in ipairs(instinctTokenize(text)) do
+            instinctCollectBuffer[#instinctCollectBuffer + 1] = word
+        end
+        local parts = {}
+        for index = 1, math.min(#instinctCollectBuffer, INSTINCT_WORD_COUNT) do
+            parts[index] = instinctCollectBuffer[index]
+        end
+        if #instinctCollectBuffer < INSTINCT_WORD_COUNT then return end
+        instinctCollectBuffer = {}
+        local captured = table.concat(parts)
+        if captured == "" or _seen[captured] then return end
+        _seen[captured] = true
+        task.delay(1.25, function() _seen[captured] = nil end)
+        appendToBox(captured)
+    end
+
+    local instinctNotifyRemote = resolveNotifyRemote()
+    local instinctListenConnection
+    if instinctNotifyRemote then
+        if getgenv then
+            local prev = getgenv().VonCodeRedeemerNotifyConnection
+            if prev then pcall(function() prev:Disconnect() end) end
+        end
+        instinctListenConnection = instinctNotifyRemote.OnClientEvent:Connect(function(...)
+            pcall(onInstinctAnnouncement, ...)
+        end)
+        if getgenv then getgenv().VonCodeRedeemerNotifyConnection = instinctListenConnection end
+    end
+
+    if getgenv then
+        getgenv().StopAura = function()
+            if instinctListenConnection then
+                pcall(function() instinctListenConnection:Disconnect() end)
+                instinctListenConnection = nil
+            end
+            if getgenv().VonCodeRedeemerNotifyConnection then
+                pcall(function() getgenv().VonCodeRedeemerNotifyConnection:Disconnect() end)
+                getgenv().VonCodeRedeemerNotifyConnection = nil
+            end
+            if _listenInputConnection then _listenInputConnection:Disconnect(); _listenInputConnection = nil end
+            if _clearFeedInputConnection then _clearFeedInputConnection:Disconnect(); _clearFeedInputConnection = nil end
+            stopAntiLag(); stopAntiRagdoll(); stopRemoveAccessories(); autoBuyStop()
+            if GUI then GUI:Destroy() end
+        end
+    end
+
+    if _antiLagEnabled then startAntiLag() end
+    if _antiRagdollEnabled then startAntiRagdoll() end
+    if _removeAccessoriesEnabled then startRemoveAccessories() end
+    if savedConfig.autoBuy then autoBuyStart() end
+
+    setupListenKeybind()
+    setupClearFeedKeybind()
+
+    setStatus("Von Code Redeemer loaded.", C.gold)
+    -- ===== ORIGINAL SCRIPT ENDS =====
+end)
+
+if not success then
+    warn("Von Code Redeemer error: " .. tostring(err))
+    print("Check the error above. The script may not work in this environment.")
+end
